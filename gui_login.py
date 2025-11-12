@@ -1,84 +1,136 @@
 from tkinter import *
 from tkinter import messagebox
-from functools import partial
+import security, config, storage
 
+# ===== Lógica de registo e login (persistente) =====
+def register_user(username: str, password: str) -> bool:
+    if not username or not password:
+        messagebox.showwarning("Registo", "Preencha username e password.")
+        return False
+    if storage.user_exists(username):
+        messagebox.showwarning("Registo", "Username já existe.")
+        return False
+    try:
+        record = security.secure_password(password)  # proteção feita no ficheiro de segurança
+    except RuntimeError as e:
+        messagebox.showerror("Registo", str(e))
+        return False
+    storage.save_user_record(username, record)
+    return True
 
-# Função para mostrar a página de consentimento após o login
-def user_credential(username, password, main_frame, consent_frame):
-    user = username.get()
-    pwd = password.get()
+def check_login(username: str, password: str) -> bool:
+    rec = storage.get_user_record(username)
+    if not rec:
+        return False
+    return security.verify_with_record(password, rec)
 
-    if user and pwd:
-        print("Username entered:", user)
-        print("Password entered:", pwd)
-        # Exemplo de uma verificação de login bem-sucedido
-        messagebox.showinfo("Login", "Login bem-sucedido!")
-        
-        # Esconde a página principal e mostra a página de consentimento
-        main_frame.pack_forget()  # Esconde a página de login
-        consent_frame.pack(fill="both", expand=True)  # Mostra a página de consentimento
-    else:
-        messagebox.showwarning("Aviso", "Por favor, preencha ambos os campos!")
+# ===== Navegação =====
+def show_login(main_frame, consent_frame):
+    consent_frame.pack_forget()
+    main_frame.pack(fill="both", expand=True)
 
-
-# Função para mostrar a página de consentimento (simples)
 def show_consent(consent_frame):
-    consent_frame.pack_forget()  # Esconde a página de consentimento
+    consent_frame.pack_forget()
     messagebox.showinfo("Consentimento", "Você aceitou os termos!")
 
-# Função para voltar à página de login
-def show_login(main_frame, consent_frame):
-    consent_frame.pack_forget()  # Esconde a página de consentimento
-    main_frame.pack(fill="both", expand=True)  # Mostra a página de login
-
-
-# Janela principal
+# ===== GUI =====
 root = Tk()
 root.title("Formulário de Login")
-root.geometry("300x300")
+root.geometry("320x380")
 
-# Frame de consentimento (após login)
+# Frames
+main_frame = Frame(root)
 consent_frame = Frame(root)
 
-# Título da tela de consentimento
+# ---------- CONSENTIMENTO ----------
 Label(consent_frame, text="Consentimento de Uso", width="300", bg="orange", fg="white").pack()
-
-# Texto do consentimento
 Label(consent_frame, text="Por favor, aceite os termos para continuar.", width="300").pack(pady=20)
+Button(consent_frame, text="Aceitar", width=15, height=1, bg="green",
+       command=lambda: show_consent(consent_frame)).pack()
+Button(consent_frame, text="Voltar", width=15, height=1, bg="red",
+       command=lambda: show_login(main_frame, consent_frame)).pack(pady=10)
 
-# Botão de aceitação
-accept_button = Button(consent_frame, text="Aceitar", width=15, height=1, bg="green", command=lambda: show_consent(consent_frame))
-accept_button.pack()
-
-# Botão de voltar à página de login
-back_button = Button(consent_frame, text="Voltar", width=15, height=1, bg="red", command=lambda: show_login(main_frame, consent_frame))
-back_button.pack(pady=10)
-
-# Frame principal (Login)
-main_frame = Frame(root)
-
-# Título
+# ---------- LOGIN ----------
 Label(main_frame, text="Entre com seus dados", width="300", bg="orange", fg="white").pack()
+Label(main_frame, text=f"Modo de segurança: {config.SECURITY_MODE}", fg="gray").pack(pady=(4, 6))
 
-# Campo de username
-Label(main_frame, text="Username *").place(x=20, y=40)
-username = StringVar()
-Entry(main_frame, textvariable=username).place(x=90, y=42)
+Label(main_frame, text="Username *").place(x=20, y=60)
+username_var = StringVar()
+Entry(main_frame, textvariable=username_var).place(x=110, y=62)
 
-# Campo de senha
-Label(main_frame, text="Password *").place(x=20, y=80)
-password = StringVar()
-Entry(main_frame, textvariable=password, show='*').place(x=90, y=82)
+Label(main_frame, text="Password *").place(x=20, y=100)
+password_var = StringVar()
+Entry(main_frame, textvariable=password_var, show='*').place(x=110, y=102)
 
-# Botão de login
-login_button = Button(main_frame, text="Login", width=10, height=1, bg="orange", command=partial(user_credential, username, password, main_frame, consent_frame))
-login_button.place(x=105, y=130)
+remember_var = BooleanVar(value=True)
+Checkbutton(main_frame, text="Lembrar utilizador", variable=remember_var).place(x=110, y=132)
 
-# Botão de termos de uso (simula um popup)
-terms_button = Button(main_frame, text="Termos de Uso", width=10, height=1, bg="lightgray", command=lambda: messagebox.showinfo("Termos de Uso", "Aqui você pode inserir os termos de uso..."))
-terms_button.place(x=105, y=160)
+def do_login():
+    user = username_var.get().strip()
+    pwd = password_var.get()
+    if not user or not pwd:
+        messagebox.showwarning("Login", "Preencha ambos os campos.")
+        return
+    if check_login(user, pwd):
+        if remember_var.get():
+            storage.set_last_user(user)
+        messagebox.showinfo("Login", f"Bem-vindo, {user}!")
+        main_frame.pack_forget()
+        consent_frame.pack(fill="both", expand=True)
+    else:
+        messagebox.showerror("Login", "Utilizador não existe ou password inválida.")
 
-# Exibe a página de login inicialmente
+def open_register():
+    win = Toplevel(root)
+    win.title("Registo")
+    win.geometry("280x210")
+    Label(win, text="Criar conta", bg="orange", fg="white").pack(fill="x")
+
+    u = StringVar(); p = StringVar(); c = StringVar()
+    frm = Frame(win); frm.pack(padx=12, pady=10, fill="x")
+
+    Label(frm, text="Username").grid(row=0, column=0, sticky="w")
+    Entry(frm, textvariable=u).grid(row=0, column=1)
+
+    Label(frm, text="Password").grid(row=1, column=0, sticky="w", pady=(6,0))
+    Entry(frm, textvariable=p, show="*").grid(row=1, column=1, pady=(6,0))
+
+    Label(frm, text="Confirmar").grid(row=2, column=0, sticky="w", pady=(6,0))
+    Entry(frm, textvariable=c, show="*").grid(row=2, column=1, pady=(6,0))
+
+    def do_register():
+        user = u.get().strip()
+        pwd  = p.get()
+        cf   = c.get()
+        if not user or not pwd:
+            messagebox.showwarning("Registo", "Preencha username e password.")
+            return
+        if pwd != cf:
+            messagebox.showwarning("Registo", "As passwords não coincidem.")
+            return
+        if register_user(user, pwd):
+            storage.set_last_user(user)  # lembrar recém-registado
+            messagebox.showinfo("Registo", "Conta criada com sucesso!")
+            win.destroy()
+            main_frame.pack_forget()
+            consent_frame.pack(fill="both", expand=True)
+
+    Button(win, text="Criar", bg="orange", command=do_register).pack(pady=8)
+    Button(win, text="Fechar", command=win.destroy).pack()
+
+Button(main_frame, text="Login", width=10, height=1, bg="orange",
+       command=do_login).place(x=110, y=170)
+
+Button(main_frame, text="Registar", width=10, height=1,
+       command=open_register).place(x=110, y=205)
+
+Button(main_frame, text="Termos de Uso", width=12, height=1, bg="lightgray",
+       command=lambda: messagebox.showinfo("Termos de Uso", "Aqui você pode inserir os termos de uso...")).place(x=104, y=240)
+
+# Pré-preencher com o último utilizador lembrado
+last = storage.get_last_user()
+if last:
+    username_var.set(last)
+
 main_frame.pack(fill="both", expand=True)
-
 root.mainloop()
