@@ -45,6 +45,8 @@ consent_frame = Frame(root)
 # ---------- CONSENTIMENTO ----------
 Label(consent_frame, text="Consentimento de Uso", width="300", bg="orange", fg="white").pack()
 Label(consent_frame, text="Por favor, aceite os termos para continuar.", width="300").pack(pady=20)
+Button(consent_frame, text="Termos de Uso", width=15, height=1, bg="lightgray",
+       command=lambda: messagebox.showinfo("Termos de Uso", "Aqui você pode inserir os termos de uso...")).pack(pady=5)
 Button(consent_frame, text="Aceitar", width=15, height=1, bg="green",
        command=lambda: show_consent(consent_frame)).pack()
 Button(consent_frame, text="Voltar", width=15, height=1, bg="red",
@@ -79,6 +81,25 @@ def do_login():
         consent_frame.pack(fill="both", expand=True)
     else:
         messagebox.showerror("Login", "Utilizador não existe ou password inválida.")
+
+def open_consent_for_register():
+    # Cria janela de consentimento específica para o registo
+    win = Toplevel(root)
+    win.title("Consentimento")
+    win.geometry("280x220")
+
+    Label(win, text="Consentimento de Uso", bg="orange", fg="white").pack(fill="x")
+    Label(win, text="Aceite os termos para criar conta.").pack(pady=20)
+
+    Button(win, text="Termos de Uso", width=15, height=1, bg="lightgray",
+           command=lambda: messagebox.showinfo("Termos de Uso", "Aqui você pode inserir os termos de uso...")).pack(pady=5)
+
+    def accept():
+        win.destroy()
+        open_register()
+
+    Button(win, text="Aceitar", bg="green", width=12, command=accept).pack()
+    Button(win, text="Recusar", bg="red", width=12, command=win.destroy).pack(pady=8)
 
 def open_register():
     win = Toplevel(root)
@@ -122,10 +143,7 @@ Button(main_frame, text="Login", width=10, height=1, bg="orange",
        command=do_login).place(x=110, y=170)
 
 Button(main_frame, text="Registar", width=10, height=1,
-       command=open_register).place(x=110, y=205)
-
-Button(main_frame, text="Termos de Uso", width=12, height=1, bg="lightgray",
-       command=lambda: messagebox.showinfo("Termos de Uso", "Aqui você pode inserir os termos de uso...")).place(x=104, y=240)
+       command=lambda: open_consent_for_register()).place(x=110, y=205)
 
 # Pré-preencher com o último utilizador lembrado
 last = storage.get_last_user()
