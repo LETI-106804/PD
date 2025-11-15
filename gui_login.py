@@ -202,46 +202,20 @@ def do_login():
     # Tentar efetuar login numa thread em segundo plano para não bloquear a
     # interface (PBKDF2 é CPU-intensivo)
         def handle_login_result(ok, exc=None):
+            """Trata o resultado do login.
+
+            - Se exc for fornecida, mostra erro técnico.
+            - Se ok for False, incrementa tentativas falhadas, regista auditoria e
+              mostra popup de erro com tentativas restantes ou bloqueio.
+            - Se ok for True, faz o fluxo de sucesso (reset attempts, auditoria,
+              dashboard/consentimento) e retorna.
+            """
             if exc:
                 messagebox.showerror("Login", f"Erro ao verificar credenciais: {exc}")
                 return
-            if ok:
-                try:
-                    storage.reset_failed_attempts(user)
-                except Exception as e:
-                        # não-fatal: mostrar aviso mas continuar o processo de login
-                    messagebox.showwarning("Login", f"Não foi possível resetar as tentativas falhadas: {e}")
-                try:
-                    ok, fb = storage.safe_add_audit_log(user, "login_success", None)
-                    if not ok:
-                        messagebox.showwarning("Aviso (dev)", f"Falha ao gravar registo de auditoria. Verifique: {fb}")
-                except Exception:
-                    pass
-                if remember_var.get():
-                    try:
-                        storage.set_last_user(user)
-                    except Exception as e:
-                        messagebox.showwarning("Login", f"Não foi possível guardar utilizador lembrado: {e}")
-                messagebox.showinfo("Login", f"Bem-vindo, {user}!")
-                main_frame.pack_forget()
-                # se o utilizador já deu consentimento, mostrar o dashboard; caso contrário mostrar o ecrã de consentimento
-                try:
-                    rec = storage.get_user_record(user)
-                except Exception:
-                    rec = None
-                if rec and rec.get("consent"):
-                    try:
-                            # Escrita em melhor-esforço; não bloquear a UI se falhar
-                        storage.safe_add_audit_log(user, "register_success", None)
-                    except Exception:
-                        pass
-                    dashboard_frame.pack(fill="both", expand=True)
-                    update_dashboard_buttons()
-                else:
-                    consent_frame.pack(fill="both", expand=True)
-                    # Incrementar o contador de falhas e, possivelmente, bloquear a conta
-                # Login bem-sucedido; sair para evitar executar o ramo de falha abaixo
-                return
+
+            if not ok:
+                # Tentativa falhada: incrementar contador e registar auditoria
                 try:
                     failed = storage.increment_failed_attempts(user)
                 except Exception as e:
@@ -268,6 +242,45 @@ def do_login():
                 else:
                     remaining = config.MAX_FAILED_ATTEMPTS - (failed or 1)
                     messagebox.showerror("Login", f"Utilizador não existe ou password inválida. Tentativas restantes: {remaining}")
+                return
+
+            # --- caminho de sucesso ---
+            try:
+                storage.reset_failed_attempts(user)
+            except Exception as e:
+                messagebox.showwarning("Login", f"Não foi possível resetar as tentativas falhadas: {e}")
+
+            try:
+                ok_audit, fb = storage.safe_add_audit_log(user, "login_success", None)
+                if not ok_audit:
+                    messagebox.showwarning("Aviso (dev)", f"Falha ao gravar registo de auditoria. Verifique: {fb}")
+            except Exception:
+                pass
+
+            if remember_var.get():
+                try:
+                    storage.set_last_user(user)
+                except Exception as e:
+                    messagebox.showwarning("Login", f"Não foi possível guardar utilizador lembrado: {e}")
+
+            messagebox.showinfo("Login", f"Bem-vindo, {user}!")
+            main_frame.pack_forget()
+
+            try:
+                rec = storage.get_user_record(user)
+            except Exception:
+                rec = None
+
+            if rec and rec.get("consent"):
+                try:
+                    storage.safe_add_audit_log(user, "register_success", None)
+                except Exception:
+                    pass
+                dashboard_frame.pack(fill="both", expand=True)
+                update_dashboard_buttons()
+            else:
+                consent_frame.pack(fill="both", expand=True)
+            return
 
         def login_worker():
             try:
