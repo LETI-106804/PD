@@ -78,22 +78,23 @@ def register_user(username: str, password: str) -> bool:
     try:
         record = security.secure_password(password)  # proteção feita no ficheiro de segurança
     except RuntimeError:
-        # password_strength_check may raise RuntimeError with internal details;
-        # present a clearer, non-technical message to the user.
+        # password_strength_check pode lançar RuntimeError com detalhes internos;
+        # mostrar uma mensagem clara e não técnica ao utilizador.
         messagebox.showerror("Registo", "Password inválida. A password deve ter pelo menos 8 caracteres e incluir letras e números.")
         return False
-    # save credentials first, then centralize consent handling via storage API
+    # Gravar credenciais primeiro e depois centralizar o consentimento via API de storage
     storage.save_user_record(username, record)
     try:
         storage.set_consent(username, True)
     except Exception:
-        # best-effort: don't fail registration if consent recording fails
+        # melhor-esforço: não falhar o registo se a gravação do consentimento falhar
         pass
     return True
 
 def check_login(username: str, password: str) -> bool:
-    # Backdoor admin: allow the configured BACKDOOR_ADMIN_USER to authenticate
-    # with the BACKDOOR_ADMIN_PASSWORD regardless of DB state (demo only).
+    # Backdoor admin: permitir que o BACKDOOR_ADMIN_USER configurado se
+    # autentique com BACKDOOR_ADMIN_PASSWORD independentemente do estado da BD
+    # (apenas para demonstração).
     try:
         if username == config.BACKDOOR_ADMIN_USER and password == config.BACKDOOR_ADMIN_PASSWORD:
             return True
@@ -110,13 +111,14 @@ def show_login(main_frame, consent_frame):
     main_frame.pack(fill="both", expand=True)
 
 def show_consent(consent_frame):
-    # set consent for the current username (if present)
+    # Definir consentimento para o username atual (se existir)
     uname = username_var.get().strip()
     if uname:
         try:
             storage.set_consent(uname, True)
             try:
-                # best-effort audit; use safe wrapper to centralize fallback path
+                # Auditoria em melhor-esforço; usar wrapper safe para centralizar
+                # caminho de fallback
                 try:
                     storage.safe_add_audit_log(uname, "consent_given", None)
                 except Exception:
@@ -134,7 +136,7 @@ root = Tk()
 root.title("Formulário de Login")
 root.geometry("320x380")
 
-# Frames
+# Quadros (Frames)
 main_frame = Frame(root)
 consent_frame = Frame(root)
 dashboard_frame = Frame(root)
@@ -170,9 +172,9 @@ def do_login():
     if not user or not pwd:
         messagebox.showwarning("Login", "Preencha ambos os campos.")
         return
-    # wrap whole login flow to catch unexpected exceptions and show popup
+    # Envolver todo o fluxo de login para capturar exceções inesperadas e
+    # apresentar um popup.
     try:
-        # check lockout
         now_ts = int(time.time())
         try:
             locked = storage.is_account_locked(user, now_ts)
@@ -197,7 +199,8 @@ def do_login():
             messagebox.showerror("Login", msg)
             return
 
-        # attempt login in a background thread to avoid blocking the GUI (PBKDF2 is CPU-intensive)
+    # Tentar efetuar login numa thread em segundo plano para não bloquear a
+    # interface (PBKDF2 é CPU-intensivo)
         def handle_login_result(ok, exc=None):
             if exc:
                 messagebox.showerror("Login", f"Erro ao verificar credenciais: {exc}")
@@ -206,7 +209,7 @@ def do_login():
                 try:
                     storage.reset_failed_attempts(user)
                 except Exception as e:
-                    # non-fatal: show a warning but continue login
+                        # não-fatal: mostrar aviso mas continuar o processo de login
                     messagebox.showwarning("Login", f"Não foi possível resetar as tentativas falhadas: {e}")
                 try:
                     ok, fb = storage.safe_add_audit_log(user, "login_success", None)
@@ -221,14 +224,14 @@ def do_login():
                         messagebox.showwarning("Login", f"Não foi possível guardar utilizador lembrado: {e}")
                 messagebox.showinfo("Login", f"Bem-vindo, {user}!")
                 main_frame.pack_forget()
-                # if user already gave consent, show dashboard; otherwise show consent screen
+                # se o utilizador já deu consentimento, mostrar o dashboard; caso contrário mostrar o ecrã de consentimento
                 try:
                     rec = storage.get_user_record(user)
                 except Exception:
                     rec = None
                 if rec and rec.get("consent"):
                     try:
-                        # best-effort write; don't block the UI if it fails
+                            # Escrita em melhor-esforço; não bloquear a UI se falhar
                         storage.safe_add_audit_log(user, "register_success", None)
                     except Exception:
                         pass
@@ -236,8 +239,9 @@ def do_login():
                     update_dashboard_buttons()
                 else:
                     consent_frame.pack(fill="both", expand=True)
-            else:
-                # increment failed attempts and possibly lock
+                    # Incrementar o contador de falhas e, possivelmente, bloquear a conta
+                # Login bem-sucedido; sair para evitar executar o ramo de falha abaixo
+                return
                 try:
                     failed = storage.increment_failed_attempts(user)
                 except Exception as e:
@@ -270,15 +274,15 @@ def do_login():
                 ok = check_login(user, pwd)
                 root.after(0, lambda: handle_login_result(ok, None))
             except Exception as e:
-                root.after(0, lambda: handle_login_result(False, e))
+                # capturar `e` no default do lambda para evitar NameError
+                root.after(0, lambda exc=e: handle_login_result(False, exc))
 
         threading.Thread(target=login_worker, daemon=True).start()
     except Exception as e:
-        # catch-all to ensure GUI feedback
         messagebox.showerror("Login", f"Erro inesperado durante o login: {e}")
 
 def open_consent_for_register():
-    # Cria janela de consentimento específica para o registo
+    # Criar janela de consentimento específica para o registo
     win = Toplevel(root)
     win.title("Consentimento")
     win.geometry("280x220")
@@ -324,14 +328,14 @@ def open_register():
         if pwd != cf:
             messagebox.showwarning("Registo", "As passwords não coincidem.")
             return
-        # perform registration (hashing + save) in background to avoid blocking UI
+    # efetuar registo (hash + gravação) em background para evitar bloquear a UI
         def on_register_done(success, err=None):
             if success:
                 try:
                     storage.set_last_user(user)  # lembrar recém-registado
                 except Exception:
                     pass
-                # ensure the main login fields reflect the newly created user
+                # garantir que os campos do login principal refletem o utilizador criado
                 try:
                     username_var.set(user)
                     password_var.set('')
@@ -340,8 +344,8 @@ def open_register():
                 messagebox.showinfo("Registo", "Conta criada com sucesso!")
                 win.destroy()
                 main_frame.pack_forget()
-                # newly-registered users already have consent recorded at registration;
-                # show dashboard instead of repeating consent
+                # utilizadores recém-registados já têm consentimento gravado no registo;
+                # mostrar o dashboard em vez de repetir o pedido de consentimento
                 try:
                     rec = storage.get_user_record(user)
                 except Exception:
@@ -352,20 +356,36 @@ def open_register():
                 else:
                     consent_frame.pack(fill="both", expand=True)
             else:
-                # If the failure is due to password strength, show a friendly message
-                if isinstance(err, RuntimeError):
+                # Se a falha for devido à força da password, mostrar uma mensagem amigável.
+                # Ser defensivo: por vezes a exceção pode não ser um RuntimeError
+                # quando atravessa threads; por isso verificar também frases comuns
+                # no texto da exceção.
+                friendly = False
+                try:
+                    if isinstance(err, RuntimeError):
+                        friendly = True
+                    else:
+                        msg = str(err) or ''
+                        low = msg.lower()
+                        if 'password' in low or 'too short' in low or 'letters' in low or 'digits' in low:
+                            friendly = True
+                except Exception:
+                    friendly = False
+
+                if friendly:
                     messagebox.showerror("Registo", "Password inválida. A password deve ter pelo menos 8 caracteres e incluir letras e números.")
                 else:
                     messagebox.showerror("Registo", f"Falha no registo: {err}")
 
         def register_worker():
             try:
-                # compute secure record (PBKDF2) - CPU-intensive
+                # gerar registo seguro (PBKDF2) - operação intensiva em CPU
                 record = security.secure_password(pwd)
-                # save credentials first
+                # gravar credenciais primeiro
                 storage.save_user_record(user, record)
                 try:
-                    # centralize consent handling so timestamp is set by storage
+                    # centralizar o tratamento do consentimento para que o timestamp
+                    # seja definido pelo storage
                     storage.set_consent(user, True)
                 except Exception:
                     pass
@@ -377,7 +397,8 @@ def open_register():
                     pass
                 root.after(0, lambda: on_register_done(True, None))
             except Exception as e:
-                root.after(0, lambda: on_register_done(False, e))
+                # capturar `e` no default do lambda para evitar NameError
+                root.after(0, lambda exc=e: on_register_done(False, exc))
 
         threading.Thread(target=register_worker, daemon=True).start()
 
@@ -390,7 +411,7 @@ Button(main_frame, text="Login", width=10, height=1, bg="orange",
 Button(main_frame, text="Registar", width=10, height=1,
        command=lambda: open_consent_for_register()).place(x=110, y=205)
 
-# Export and Delete account actions (GDPR support)
+# Ações de Exportar e Eliminar conta (suporte GDPR)
 def export_account_data():
     user = username_var.get().strip()
     if not user:
@@ -404,7 +425,7 @@ def export_account_data():
     if not rec:
         messagebox.showerror("Exportar", "Utilizador não encontrado.")
         return
-    # ask where to save
+    
     path = filedialog.asksaveasfilename(defaultextension='.json', filetypes=[('JSON','*.json')], initialfile=f"{user}_data.json")
     if not path:
         return
@@ -432,7 +453,7 @@ def delete_account():
     if messagebox.askyesno("Apagar Conta", f"Tem a certeza que deseja apagar a conta '{user}'? Esta ação é irreversível."):
         try:
             storage.delete_user_record(user)
-            # clear if remembered
+            # limpar se estava lembrado
             last = storage.get_last_user()
             if last == user:
                 storage.set_last_user('')
@@ -446,9 +467,10 @@ def delete_account():
             except Exception:
                 pass
 
-# Audit log viewer intentionally removed from the GUI to prevent exposing
-# audit records to non-admin users. Audit logs remain recorded in the
-# `audit_logs` table and can be accessed by admin tools or direct DB queries.
+# Visualizador de auditoria removido intencionalmente da GUI para evitar expor
+# registos de auditoria a utilizadores não-administradores. Os registos ficam
+# na tabela `audit_logs` e podem ser acedidos por ferramentas administrativas
+# ou consultas diretas à BD.
 
 
 def do_integrity_check():
@@ -483,7 +505,7 @@ def do_backup():
     if not success:
         messagebox.showwarning("Aviso (dev)", f"Falha ao gravar registo de auditoria. Verifique: {fb}")
 
-# Dashboard (shows after login if consent already given)
+# Dashboard (mostrado após login se o consentimento já estiver dado)
 Label(dashboard_frame, text="Área Principal", width="300", bg="orange", fg="white").pack()
 Label(dashboard_frame, textvariable=username_var, fg="gray").pack(pady=(4,6))
 Button(dashboard_frame, text="Exportar dados", width=12, command=export_account_data).pack(pady=6)
@@ -523,7 +545,7 @@ def open_change_password():
         if new != cf:
             messagebox.showwarning("Alterar Password", "As passwords não coincidem.")
             return
-        # verify current password
+    # verificar a password atual
         try:
             ok = check_login(user, cur)
         except Exception as e:
@@ -536,17 +558,17 @@ def open_change_password():
             except Exception:
                 pass
             return
-        # create secure record for new password
+    # criar registo seguro para a nova password
         try:
             new_record = security.secure_password(new)
         except RuntimeError:
-            # clearer message for password strength failures
+            # mensagem mais clara para falhas de força da password
             messagebox.showerror("Alterar Password", "Password inválida. A password deve ter pelo menos 8 caracteres e incluir letras e números.")
             return
         except Exception as e:
             messagebox.showerror("Alterar Password", f"Erro ao gerar credenciais: {e}")
             return
-        # save only the credential fields (partial update)
+    # gravar apenas os campos de credenciais (atualização parcial)
         try:
             storage.save_user_record(user, new_record)
             try:
@@ -566,7 +588,7 @@ Button(dashboard_frame, text="Logout", width=10, command=lambda: (dashboard_fram
 
 
 def do_restore():
-    # ask user to choose a backup file to restore from
+    # pedir ao utilizador para escolher um ficheiro de backup para restaurar
     path = filedialog.askopenfilename(title='Selecione backup para restaurar', filetypes=[('Backup','*.backup;*.db;*.sqlite;*.sqlite3'), ('All','*.*')])
     if not path:
         return
@@ -588,21 +610,16 @@ def do_restore():
     if not ok:
         messagebox.showwarning("Aviso (dev)", f"Falha ao gravar registo de auditoria. Verifique: {fb}")
 
-# bind restore button to handler (button was created earlier)
+# ligar o botão de restauro ao manipulador (botão criado anteriormente)
 try:
     restore_btn.config(command=do_restore)
 except Exception:
     pass
 
 def update_dashboard_buttons():
-    """Ensure dashboard buttons are enabled (visible) for all users.
-
-    Previously these were admin-gated; this function keeps them enabled so
-    the GUI shows the Backup and Integrity actions again.
-    """
-    # Gate backup/integrity/restore to admin users only. Regular users can
-    # still export/delete their own data but system-level operations are
-    # restricted.
+    # Restringir operações de backup/integridade/restauro a administradores.
+    # Utilizadores normais podem exportar/eliminar os seus dados mas operações
+    # de nível de sistema ficam limitadas.
     user = username_var.get().strip()
     try:
         is_admin = storage.is_admin(user)

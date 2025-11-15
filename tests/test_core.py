@@ -5,9 +5,9 @@ import sqlite3
 import pathlib
 import pytest
 
-# Make tests runnable both via `pytest` and `python tests/test_core.py` by
-# ensuring the project root is on sys.path so imports like `import config`
-# resolve when the current working directory is the tests folder.
+# Tornar os testes executáveis tanto via `pytest` como `python tests/test_core.py`:
+# garantir que a raiz do projeto está em sys.path para que importações como
+# `import config` resolvam quando o diretório atual for a pasta dos testes.
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -22,16 +22,16 @@ def isolate_db(tmp_path, monkeypatch):
     db_path = tmp_path / "test_users.db"
     backup_dir = tmp_path / "backups"
     backup_dir.mkdir()
-    # patch config
+    # ajustar (monkeypatch) as configurações para um ambiente de teste isolado
     monkeypatch.setattr(config, 'DB_PATH', str(db_path))
     monkeypatch.setattr(config, 'BACKUP_DIR', str(backup_dir))
-    # ensure backup encryption disabled for tests unless cryptography is available
+    # garantir que a encriptação de backup está desativada para os testes
     monkeypatch.setattr(config, 'BACKUP_ENCRYPT', False)
-    # ensure a clean start
+    # garantir um arranque limpo
     if db_path.exists():
         db_path.unlink()
     yield
-    # teardown: remove files if present
+    # teardown: remover ficheiros se presentes
     try:
         if db_path.exists():
             db_path.unlink()
@@ -57,24 +57,24 @@ def test_consent_export_delete():
     password = 'Password1'
     rec = create_user(username, password)
 
-    # set consent and verify
+    # definir consentimento e verificar
     storage.set_consent(username, True)
     user = storage.get_user_record(username)
     assert user is not None
     assert user.get('consent') is True
     assert user.get('consent_ts') is not None
 
-    # export without secrets
+    # exportar sem segredos
     exported = storage.export_user_record(username, include_secrets=False)
     assert exported is not None
     assert 'salt' not in exported and 'hash' not in exported
 
-    # export with secrets
+    # exportar com segredos
     exported2 = storage.export_user_record(username, include_secrets=True)
     assert exported2 is not None
     assert 'salt' in exported2 and 'hash' in exported2
 
-    # delete and ensure gone
+    # eliminar e garantir que os dados desapareceram
     storage.delete_user_record(username)
     assert storage.get_user_record(username) is None
 
@@ -84,20 +84,20 @@ def test_lockout_and_attempts():
     password = 'S3curePwd'
     create_user(username, password)
 
-    # reset attempts
+    # reiniciar contador de tentativas
     storage.reset_failed_attempts(username)
-    # increment attempts
+    # incrementar tentativas
     val = 0
     for i in range(3):
         val = storage.increment_failed_attempts(username)
     assert val >= 1
 
-    # set lockout and check
+    # definir bloqueio e verificar
     future = int(time.time()) + 60
     storage.set_lockout(username, future)
     assert storage.is_account_locked(username, int(time.time())) is True
 
-    # reset
+    # reiniciar
     storage.reset_failed_attempts(username)
     assert storage.get_locked_until(username) in (None, 0)
 

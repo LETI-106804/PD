@@ -1,5 +1,14 @@
 # 📘 Sistema de Autenticação com Privacy by Design
 
+---
+
+## 🤝 Autores
+- Número: **106804, 111342, 122635**
+- Aluno: **Carlos Correia, Pedro Correia, Rui Andrez**
+- este projeto pode ser acessado no repositório GitHub 'https://github.com/LETI-106804/PD.git'
+
+---
+
 ## 📌 Descrição do Projeto
 Este projeto implementa um sistema de autenticação desenvolvido com **Tkinter**, **SQLite** e **Python**, seguindo os princípios de **Privacy by Design**, bem como boas práticas alinhadas com requisitos de **NIS2**, **GDPR** e segurança moderna.
 
@@ -133,12 +142,6 @@ Formato: **JSON**
 - Usado apenas para fins académicos.
 
 (O texto completo está no código em `TERMS_AND_CONDITIONS`.)
-
----
-
-## 🤝 Autores
-- Número: **106804, 111342, 122635**
-- Aluno: **Carlos Correia, Pedro Correia, Rui Andrez**
 
 ---
 

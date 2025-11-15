@@ -5,16 +5,19 @@ import os, shutil, time
 from datetime import datetime, timezone
 import warnings, traceback
 
-# Name of the fallback audit file (used when DB writes fail)
+# Nome do ficheiro de fallback para auditoria (quando gravações na BD falham)
 AUDIT_FALLBACK_FILENAME = 'audit_fallback.log'
 
 def get_audit_fallback_path() -> str:
-    """Return the path to the audit fallback file, ensuring the directory exists."""
+    """Devolve o caminho para o ficheiro de fallback de auditoria, garantindo
+    que a diretoria existe (melhor-esforço).
+    """
     fallback_dir = config.BACKUP_DIR or '.'
     try:
         os.makedirs(fallback_dir, exist_ok=True)
     except Exception:
-        # ignore directory creation errors; joining will still produce a path
+        # Melhor-esforço: se a criação da diretoria falhar, ainda devolvemos um
+        # caminho válido (pode falhar mais tarde ao escrever).
         pass
     return os.path.join(fallback_dir, AUDIT_FALLBACK_FILENAME)
 
@@ -39,7 +42,7 @@ def _conn():
             v TEXT
         )
     """)
-    # Audit logs for incidents and important events
+    # Tabela de auditoria para incidentes e eventos importantes
     conn.execute("""
         CREATE TABLE IF NOT EXISTS audit_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,11 +52,12 @@ def _conn():
             details TEXT
         )
     """)
-    # Migration: ensure new columns exist for older DBs (ALTER TABLE is safe in sqlite)
+    # Migração: garantir que colunas novas existem em BD antigas (ALTER TABLE é
+    # seguro no SQLite). Isto permite evoluir o esquema sem quebrar versões.
     try:
         cur = conn.execute("PRAGMA table_info(users)").fetchall()
         existing_cols = {row[1] for row in cur}
-        # desired columns added in recent changes
+        # Colunas desejadas adicionadas em alterações recentes
         migrations = {
             "consent_ts": "TEXT",
             "failed_attempts": "INTEGER DEFAULT 0",
@@ -63,52 +67,57 @@ def _conn():
             if col not in existing_cols:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
     except Exception as e:
-        # Record migration failure for observability. We avoid calling
-        # add_audit_log() here because that uses _conn() and would recurse.
+        # Registar falha de migração para observabilidade. Evitamos chamar
+        # add_audit_log() aqui porque usa _conn() e provocaria recursão.
         tb = traceback.format_exc()
         try:
-            # attempt to write directly into audit_logs table using this conn
+            # tentar escrever diretamente na tabela audit_logs usando esta ligação
             try:
                 conn.execute("INSERT INTO audit_logs (ts, username, event_type, details) VALUES (?,?,?,?)", (
                     datetime.now(timezone.utc).isoformat(), None, 'migration_failed', str(e)
                 ))
             except Exception:
-                # if inserting into audit_logs fails, write a fallback file
+                # se a inserção em audit_logs falhar, escrever num ficheiro de fallback
                 fallback_dir = config.BACKUP_DIR or '.'
                 os.makedirs(fallback_dir, exist_ok=True)
                 fallback_path = os.path.join(fallback_dir, 'migration_fallback.log')
                 with open(fallback_path, 'a', encoding='utf-8') as f:
                     f.write(f"{datetime.now(timezone.utc).isoformat()} | migration_failed | error={e} | tb={tb}\n")
         except Exception:
-            # give up but emit a developer warning so issues are visible during testing
+            # desistir e emitir um aviso de desenvolvimento para que o problema
+            # seja visível durante os testes
             warnings.warn(f"DB migration failed and fallback logging also failed: {e}")
     return conn
 
 
 def _ensure_column(conn, col: str, col_def: str) -> None:
-    """Ensure a single column exists in users table; add it if missing."""
+    """Assegura que uma coluna existe na tabela `users`; adiciona-a se faltar.
+
+    Função de melhor-esforço: em caso de falha não gera exceção para não
+    interromper os fluxos que dependem desta verificação.
+    """
     try:
         cur = conn.execute("PRAGMA table_info(users)").fetchall()
         existing = {row[1] for row in cur}
         if col not in existing:
             conn.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
     except Exception:
-        # don't raise here; caller will handle
+        # Não propagar erro; o chamador lida com falhas de escrita.
         pass
 
 # ---------- Users ----------
 def save_user_record(username: str, record: Dict[str, str]) -> None:
     with _conn() as conn:
-        # defensively ensure columns exist before modifying (fix older DBs missing new columns)
+        # Garantir que as colunas necessárias existem para BD antigas
         _ensure_column(conn, "consent_ts", "TEXT")
         _ensure_column(conn, "failed_attempts", "INTEGER DEFAULT 0")
         _ensure_column(conn, "locked_until", "INTEGER")
 
-        # read current schema
+        # Obter esquema atual da tabela para normalizar colunas fornecidas
         cur = conn.execute("PRAGMA table_info(users)").fetchall()
         existing_cols = {row[1] for row in cur}
 
-        # normalize provided record keys and types
+        # Normalizar as chaves/valores recebidos no record conforme o esquema
         provided = {}
         for k, v in record.items():
             if k not in existing_cols:
@@ -126,24 +135,24 @@ def save_user_record(username: str, record: Dict[str, str]) -> None:
             else:
                 provided[k] = v
 
-        # Always include mode when inserting a new user
+        # Incluir sempre o campo 'mode' ao inserir um novo utilizador
         provided_for_insert = provided.copy()
         if "mode" not in provided_for_insert:
             provided_for_insert.setdefault("mode", record.get("mode"))
-
-        # determine if user exists
+        # Determinar se o utilizador já existe
         row = conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
         if row:
-            # perform partial update: only update columns explicitly provided in 'record'
+            # Atualização parcial: atualizar apenas as colunas explicitamente fornecidas
             if provided:
                 set_cols = [f"{c} = ?" for c in provided.keys()]
                 sql = f"UPDATE users SET {', '.join(set_cols)} WHERE username = ?"
                 vals = list(provided.values()) + [username]
                 conn.execute(sql, tuple(vals))
-            # if nothing provided, do nothing (preserve existing row)
+            # se nada for fornecido, não alterar (preservar a linha existente)
             return
         else:
-            # insert new row: include username plus any provided columns (DB will use defaults for omitted ones)
+            # Inserir nova linha: incluir username e as colunas fornecidas
+            # (a BD usa valores por omissão para as que faltam)
             insert_cols = ["username"] + [c for c in provided_for_insert.keys() if c in existing_cols]
             insert_vals = [username] + [provided_for_insert[c] for c in provided_for_insert.keys() if c in existing_cols]
             placeholders = ",".join(["?" for _ in insert_cols])
@@ -152,7 +161,7 @@ def save_user_record(username: str, record: Dict[str, str]) -> None:
 
 def get_user_record(username: str) -> Optional[Dict[str, str]]:
     with _conn() as conn:
-        # ensure possible columns exist to avoid 'no such column' errors
+        # Garantir colunas para evitar erros 'no such column' em BDs antigas
         _ensure_column(conn, "consent_ts", "TEXT")
         _ensure_column(conn, "failed_attempts", "INTEGER DEFAULT 0")
         _ensure_column(conn, "locked_until", "INTEGER")
@@ -169,13 +178,15 @@ def get_user_record(username: str) -> Optional[Dict[str, str]]:
         rec = {}
         for idx, col in enumerate(select_cols):
             rec[col] = row[idx]
-    # normalize some fields and provide defaults
+    # Normalizar campos e fornecer defaults
+    # Normalizar campos e fornecer valores por omissão
     rec.setdefault("mode", None)
     rec.setdefault("consent", 0)
     rec.setdefault("consent_ts", None)
     rec.setdefault("failed_attempts", 0)
     rec.setdefault("locked_until", None)
-    # convert types
+    # Conversões de tipo defensivas
+    # Conversões de tipo defensivas
     try:
         rec["consent"] = bool(int(rec.get("consent") or 0))
     except Exception:
@@ -188,15 +199,18 @@ def get_user_record(username: str) -> Optional[Dict[str, str]]:
 
 
 def is_admin(username: str) -> bool:
-    # Demo/backdoor policy: only the configured BACKDOOR_ADMIN_USER is treated
-    # as an admin. This ignores any admin flags stored in the DB to ensure the
-    # environment has only a single admin account (useful for classroom demos).
+    # Política demo/backdoor: apenas o BACKDOOR_ADMIN_USER configurado é tratado
+    # como administrador. Ignora flags de admin na BD para garantir apenas uma
+    # conta administrativa (útil em demonstrações/classes).
+    # Política demo/backdoor: apenas o BACKDOOR_ADMIN_USER configurado é
+    # tratado como administrador. Ignora flags de admin na BD para garantir uma
+    # única conta administrativa (útil em demonstrações/classes).
     try:
         if username == config.BACKDOOR_ADMIN_USER:
             return True
     except Exception:
         pass
-    # otherwise no admin privileges
+    # caso contrário sem privilégios de administrador
     return False
 
 def user_exists(username: str) -> bool:
@@ -209,7 +223,8 @@ def delete_user_record(username: str) -> None:
     with _conn() as conn:
         try:
             if config.SECURE_DELETE_OVERWRITE:
-                # overwrite sensitive fields with random data before deletion
+                # Sobrepor campos sensíveis com dados aleatórios antes de apagar
+                # Sobrepor campos sensíveis com dados aleatórios antes de apagar
                 try:
                     import os, base64
                     rand_salt = base64.b64encode(os.urandom(16)).decode('utf-8')
@@ -218,17 +233,17 @@ def delete_user_record(username: str) -> None:
                     conn.execute("UPDATE users SET salt = ?, hash = ?, token = ? WHERE username = ?", (rand_salt, rand_hash, rand_token, username))
                 except Exception:
                     pass
-            # delete the user row
+                # Apagar a linha do utilizador
             conn.execute("DELETE FROM users WHERE username = ?", (username,))
-            # clear last_user if matches
+            # Limpar last_user se coincidir
             conn.execute("DELETE FROM app_state WHERE k = 'last_user' AND v = ?", (username,))
-            # optional VACUUM to try to remove remnants (may be slow)
+            # VACUUM opcional para tentar remover vestígios (pode ser lento)
             try:
                 if config.SECURE_DELETE_VACUUM:
                     conn.execute("VACUUM")
             except Exception:
                 pass
-            # log deletion
+            # Registar eliminação
             try:
                 conn.execute("INSERT INTO audit_logs (ts, username, event_type, details) VALUES (?,?,?,?)", (
                     __now_iso(), username, 'account_deleted', None
@@ -236,7 +251,7 @@ def delete_user_record(username: str) -> None:
             except Exception:
                 pass
         except Exception:
-            # best-effort: attempt to log failure
+            # tentar em melhor-esforço registar a falha
             try:
                 conn.execute("INSERT INTO audit_logs (ts, username, event_type, details) VALUES (?,?,?,?)", (
                     __now_iso(), username, 'account_delete_failed', None
@@ -245,34 +260,34 @@ def delete_user_record(username: str) -> None:
                 pass
 
 def export_user_record(username: str, include_secrets: bool = False) -> Optional[Dict[str, str]]:
-    """Export a user's data for portability requests.
+    """Exportar os dados de um utilizador para pedidos de portabilidade.
 
-    By default `include_secrets` is False and credential material (salt/hash/token)
-    is excluded from the export to avoid creating a sensitive artifact. If the
-    caller explicitly requests `include_secrets=True` the stored credential
-    material will be included (use with caution).
+    Por defeito `include_secrets` é False e o material credencial (salt/hash/token)
+    é excluído do export para evitar criar artefactos sensíveis. Se o chamador
+    pedir explicitamente `include_secrets=True`, o material das credenciais será
+    incluído (usar com cautela).
     """
     rec = get_user_record(username)
     if not rec:
         return None
     export = {"username": username, "mode": rec.get("mode"), "consent": rec.get("consent"), "consent_ts": rec.get("consent_ts")}
     if include_secrets:
-        # include underlying credential material only when explicitly requested
-        # This application stores only HASH-style credentials (salt/hash).
+        # Incluir material de credenciais apenas quando explicitamente pedido.
+        # Esta aplicação armazena apenas credenciais no formato HASH (salt/hash).
         export.update({"salt": rec.get("salt"), "hash": rec.get("hash")})
     return export
 
 
 def set_consent(username: str, consent: bool) -> None:
-    """Set the consent flag and timestamp for a user."""
+    """Definir o indicador de consentimento e o timestamp para um utilizador."""
     with _conn() as conn:
         try:
             _ensure_column(conn, "consent_ts", "TEXT")
             val = 1 if consent else 0
             ts = __now_iso() if consent else None
-            # update only existing user
+            # Atualizar apenas utilizador existente
             conn.execute("UPDATE users SET consent = ?, consent_ts = ? WHERE username = ?", (val, ts, username))
-            # log consent
+            # Registar consentimento
             try:
                 conn.execute("INSERT INTO audit_logs (ts, username, event_type, details) VALUES (?,?,?,?)", (
                     __now_iso(), username, 'consent_given' if consent else 'consent_revoked', None
@@ -280,7 +295,7 @@ def set_consent(username: str, consent: bool) -> None:
             except Exception:
                 pass
         except Exception:
-            # best-effort
+            # melhor-esforço
             pass
 
 
@@ -290,12 +305,12 @@ def __now_iso() -> str:
 
 
 def add_audit_log(username: str, event_type: str, details: Optional[str] = None) -> bool:
-    """Append an audit log entry to the audit_logs table.
+    """Acrescenta uma entrada de auditoria na tabela `audit_logs`.
 
-    Returns True on success. On failure, the function writes a fallback log
-    entry to a file in `config.BACKUP_DIR` named `audit_fallback.log` and
-    returns False. This keeps audit information available for post-mortem
-    if the database write fails.
+    Retorna True em caso de sucesso. Em falha, escreve uma entrada de fallback
+    num ficheiro em `config.BACKUP_DIR` chamado `audit_fallback.log` e retorna
+    False. Isto mantém informação de auditoria disponível para análise posterior
+    caso a gravação na BD falhe.
     """
     try:
         with _conn() as conn:
@@ -304,22 +319,23 @@ def add_audit_log(username: str, event_type: str, details: Optional[str] = None)
             ))
         return True
     except Exception as e:
-        # best-effort fallback: write a plain-text entry to a fallback file
+        # Fallback em melhor-esforço: escrever uma entrada em texto simples num ficheiro
         try:
             fallback_path = get_audit_fallback_path()
             with open(fallback_path, 'a', encoding='utf-8') as f:
                 f.write(f"{__now_iso()} | {username or '-'} | {event_type} | {details or ''} | error={e}\n")
         except Exception:
-            # if even fallback writing fails, give up but don't raise
+            # se mesmo o fallback falhar, desistir sem lançar
             pass
         return False
 
 
 def safe_add_audit_log(username: str, event_type: str, details: Optional[str] = None):
-    """Wrapper around add_audit_log that returns a tuple (ok, fallback_path).
+    """Envoltorio para add_audit_log que devolve (ok, fallback_path).
 
-    - ok: bool indicating whether the DB write succeeded.
-    - fallback_path: path to the fallback file if ok is False, otherwise None.
+    - ok: bool indicando se a escrita na BD teve sucesso.
+    - fallback_path: caminho para o ficheiro de fallback caso ok seja False,
+      caso contrário None.
     """
     try:
         ok = add_audit_log(username, event_type, details)
@@ -327,7 +343,7 @@ def safe_add_audit_log(username: str, event_type: str, details: Optional[str] = 
             return True, None
         return False, get_audit_fallback_path()
     except Exception:
-        # If add_audit_log itself raised, return False and a fallback path
+        # Se add_audit_log lançou, devolver False e o caminho de fallback
         try:
             return False, get_audit_fallback_path()
         except Exception:
@@ -335,7 +351,7 @@ def safe_add_audit_log(username: str, event_type: str, details: Optional[str] = 
 
 
 def db_integrity_check() -> str:
-    """Run PRAGMA integrity_check and return the result (first row or joined rows)."""
+    """Executa PRAGMA integrity_check e devolve o resultado (linha(s) retornada(s))."""
     try:
         with sqlite3.connect(config.DB_PATH) as conn:
             cur = conn.execute("PRAGMA integrity_check;")
@@ -348,7 +364,11 @@ def db_integrity_check() -> str:
 
 
 def backup_database(dest_dir: Optional[str] = None) -> Optional[str]:
-    """Create an online backup of the SQLite database. Returns path to backup file on success, None on failure."""
+    """Criar um backup online da base de dados SQLite.
+
+    Retorna o caminho para o ficheiro de backup em caso de sucesso, ou None em
+    caso de falha.
+    """
     dest_dir = dest_dir or config.BACKUP_DIR
     try:
         os.makedirs(dest_dir, exist_ok=True)
@@ -356,7 +376,8 @@ def backup_database(dest_dir: Optional[str] = None) -> Optional[str]:
         base = os.path.basename(config.DB_PATH)
         dest_path = os.path.join(dest_dir, f"{base}.{ts}.backup")
 
-        # Prefer sqlite3 Online Backup API
+    # Preferir a API de Backup Online do sqlite3
+    # Preferir a API de Backup Online do sqlite3
         try:
             src_conn = sqlite3.connect(config.DB_PATH)
             dest_conn = sqlite3.connect(dest_path)
@@ -365,10 +386,10 @@ def backup_database(dest_dir: Optional[str] = None) -> Optional[str]:
             dest_conn.close()
             src_conn.close()
         except Exception:
-            # fallback to file copy (best-effort)
+            # Recuo: copiar ficheiro como fallback (melhor-esforço)
             shutil.copy2(config.DB_PATH, dest_path)
 
-        # cleanup old backups (keep last N)
+    # limpeza de backups antigos (manter os últimos N)
         try:
             files = [os.path.join(dest_dir, f) for f in os.listdir(dest_dir) if f.startswith(base) and f.endswith('.backup')]
             files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
@@ -380,24 +401,24 @@ def backup_database(dest_dir: Optional[str] = None) -> Optional[str]:
         except Exception:
             pass
 
-        # audit log
-        # Optional backup encryption using Fernet (cryptography). If
-        # BACKUP_ENCRYPT is True we attempt to encrypt the created backup
-        # file with the key at config.KEY_FILE. If encryption fails (missing
-        # package, key error) we fall back to leaving the plain backup and
-        # record an audit event.
+        # Auditoria: encriptação opcional do backup usando Fernet (cryptography).
+        # Se BACKUP_ENCRYPT for True, tentamos encriptar o ficheiro de backup
+        # com a chave em config.KEY_FILE. Em falha regressamos ao backup não
+        # encriptado e registamos o evento.
         try:
             if getattr(config, 'BACKUP_ENCRYPT', False):
                 try:
                     from cryptography.fernet import Fernet
                 except Exception:
-                    # cryptography not available; record and continue with plain backup
+                    # Se o pacote cryptography não estiver disponível, registar e
+                    # continuar com o backup sem encriptação
                     try:
                         safe_add_audit_log('', 'backup_encrypt_unavailable', 'cryptography package missing')
                     except Exception:
                         pass
                 else:
-                    # ensure key file exists; create with secure permissions if missing
+                    # garantir que o ficheiro de chave existe; criar com permissões
+                    # restritas se faltar
                     try:
                         key_path = config.KEY_FILE
                         key_dir = os.path.dirname(key_path) or '.'
@@ -419,7 +440,7 @@ def backup_database(dest_dir: Optional[str] = None) -> Optional[str]:
                         enc_path = dest_path + '.enc'
                         with open(enc_path, 'wb') as ef:
                             ef.write(fernet.encrypt(data))
-                        # remove plain backup and use encrypted path
+                        # remover o backup em claro e usar o caminho encriptado
                         try:
                             os.remove(dest_path)
                         except Exception:
@@ -430,17 +451,19 @@ def backup_database(dest_dir: Optional[str] = None) -> Optional[str]:
                         except Exception:
                             pass
                     except Exception as e:
-                        # encryption failed; record and continue with plain backup
+                        # Encriptação falhou; registar e continuar com backup em claro
                         try:
                             safe_add_audit_log('', 'backup_encrypt_failed', f'error={e}')
                         except Exception:
                             pass
 
         except Exception:
-            # be defensive: do not fail backup because of encryption path
+            # Ser defensivo: não falhar o backup por causa da etapa de encriptação
+            pass
             pass
 
-        # try to restrict filesystem permissions on the created backup
+        # Tentar restringir permissões do ficheiro de backup (melhor-esforço)
+        # Tentar restringir permissões do ficheiro de backup (melhor-esforço)
         try:
             if config.BACKUP_RESTRICT_PERMISSIONS and dest_path:
                 try:
@@ -448,7 +471,10 @@ def backup_database(dest_dir: Optional[str] = None) -> Optional[str]:
                     if os.name == 'posix':
                         os.chmod(dest_path, 0o600)
                     else:
-                        # on Windows set file as read-only as a minimal restriction
+                        # No Windows marcar o ficheiro como somente-leitura como
+                        # restrição mínima
+                        # No Windows marcar o ficheiro como somente-leitura como
+                        # restrição mínima
                         os.chmod(dest_path, stat.S_IREAD)
                 except Exception:
                     pass
@@ -456,7 +482,7 @@ def backup_database(dest_dir: Optional[str] = None) -> Optional[str]:
         except Exception:
             pass
 
-        # audit log
+    # Registo de auditoria
         try:
             add_audit_log('', 'db_backup', f'path={dest_path}')
         except Exception:
@@ -472,26 +498,22 @@ def backup_database(dest_dir: Optional[str] = None) -> Optional[str]:
 
 
 def restore_database(src_path: str) -> Optional[str]:
-    """Restore the application database from the provided backup file.
+    """Restaurar a base de dados a partir do ficheiro de backup indicado.
 
-    Behavior:
-    - Validate the source DB by running PRAGMA integrity_check on it.
-    - Create a pre-restore snapshot of the current DB inside BACKUP_DIR so we can roll back if needed.
-    - Replace the live DB file with the provided file (file copy).
-    - Return the path to the pre-restore snapshot on success, or raise an exception on failure.
+    Valida a fonte (PRAGMA integrity_check), faz um snapshot pré-restauro e
+    substitui o ficheiro ativo. Em caso de backup encriptado (.enc) tenta
+    desencriptar usando a chave em config.KEY_FILE para validar.
     """
     if not os.path.exists(src_path):
         raise FileNotFoundError(f"Backup file not found: {src_path}")
-    # validate source DB integrity before replacing
-    # If the source is an encrypted backup (endswith .enc) and a key is
-    # available, attempt to decrypt to a temporary file for validation.
+
+    # Preparar ficheiro para validação (desencriptar se necessário)
     decrypted_tmp = None
+    to_validate = src_path
     try:
-        to_validate = src_path
         if src_path.endswith('.enc') and getattr(config, 'BACKUP_ENCRYPT', False):
             try:
                 from cryptography.fernet import Fernet
-                # try to read key and decrypt
                 if os.path.exists(config.KEY_FILE):
                     with open(config.KEY_FILE, 'rb') as kf:
                         key = kf.read()
@@ -499,7 +521,7 @@ def restore_database(src_path: str) -> Optional[str]:
                     with open(src_path, 'rb') as f:
                         data = f.read()
                     plain = fernet.decrypt(data)
-                    # write decrypted data to a temporary path for validation
+                    # escrever ficheiro temporário para validação
                     import tempfile
                     fd, decrypted_tmp = tempfile.mkstemp(suffix='.backup')
                     os.write(fd, plain)
@@ -508,13 +530,13 @@ def restore_database(src_path: str) -> Optional[str]:
                 else:
                     raise RuntimeError('Backup is encrypted but KEY_FILE not found')
             except Exception as e:
-                # decryption failed or cryptography not available
                 try:
                     safe_add_audit_log('', 'backup_decrypt_failed', f'file={src_path}; error={e}')
                 except Exception:
                     pass
                 raise
 
+        # Validar integridade do ficheiro a restaurar
         tmp_conn = sqlite3.connect(to_validate)
         cur = tmp_conn.execute("PRAGMA integrity_check;")
         rows = [r[0] for r in cur.fetchall()]
@@ -524,8 +546,15 @@ def restore_database(src_path: str) -> Optional[str]:
             raise RuntimeError(f"Source backup failed integrity check: {rows}")
     except sqlite3.DatabaseError as e:
         raise RuntimeError(f"Source file is not a valid sqlite database: {e}")
+    finally:
+        # garantir remoção do temporário se criado
+        if decrypted_tmp and os.path.exists(decrypted_tmp):
+            try:
+                os.remove(decrypted_tmp)
+            except Exception:
+                pass
 
-    # ensure backup dir exists
+    # Snapshot pré-restauro e substituição do ficheiro
     dest_dir = config.BACKUP_DIR
     os.makedirs(dest_dir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -533,17 +562,13 @@ def restore_database(src_path: str) -> Optional[str]:
     pre_path = os.path.join(dest_dir, f"{base}.pre_restore.{ts}.backup")
 
     try:
-        # snapshot current DB first
         try:
             shutil.copy2(config.DB_PATH, pre_path)
         except Exception:
-            # if copying fails, still attempt to continue but record None
             pre_path = None
 
-        # replace live DB with provided file
         shutil.copy2(src_path, config.DB_PATH)
 
-        # post-restore integrity check
         try:
             post = db_integrity_check()
         except Exception:
@@ -567,7 +592,7 @@ def get_audit_logs(username: Optional[str] = None, limit: int = 200):
             rows = conn.execute("SELECT ts, username, event_type, details FROM audit_logs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     return [dict(ts=r[0], username=r[1], event_type=r[2], details=r[3]) for r in rows]
 
-# ---------- Login attempt / lockout helpers ----------
+# ---------- Tentativa de login / lockout helpers ----------
 def increment_failed_attempts(username: str) -> int:
     with _conn() as conn:
         _ensure_column(conn, "failed_attempts", "INTEGER DEFAULT 0")

@@ -1,4 +1,4 @@
-# Only HASH (PBKDF2) is supported in this simplified codebase.
+# Apenas HASH (PBKDF2) é suportado nesta base de código simplificada.
 SECURITY_MODE = "HASH"
 
 # Base de dados SQLite
@@ -7,43 +7,46 @@ DB_PATH = "users.db"
 # PBKDF2 iterations (HASH mode)
 PBKDF2_ITER = 200_000
 
-# Backdoor/admin exception for demo: single admin account
-# WARNING: This stores a plaintext backdoor password in code. Only use for
-# demonstration/testing in a trusted environment (teacher demo). Remove before
-# production.
+# Backdoor/admin para demonstração: conta única de administrador.
+# AVISO: Isto guarda uma password em texto claro no código. Usar apenas para
+# demonstração/testes em ambiente confiável (ex.: demonstração docente). Remover
+# antes de produção.
 BACKDOOR_ADMIN_USER = "admin"
 BACKDOOR_ADMIN_PASSWORD = "1Q2W3E4R"
 
-# Security / account lockout policy (NIS2 / GDPR helpful hardening)
+# Política de segurança / bloqueio de conta (endurecimento útil para NIS2/GDPR)
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_SECONDS = 5 * 60  # 5 minutes
 
-# Export directory for data export (default: current working dir)
+# Diretoria para exportação de dados (por defeito: diretoria atual)
 DATA_EXPORT_DIR = "."
  
-# Backup / integrity settings
+# Configurações de backup / integridade
 BACKUP_DIR = "."
 BACKUP_RETENTION = 7  # keep last N backups
 ENABLE_AUTOMATIC_BACKUP = False
 
-# Backup hardening
-# Backup encryption: when True backups will be encrypted with Fernet (AES-128
-# in the cryptography library). This requires the `cryptography` package and
-# a key file at `KEY_FILE`. Backups are encrypted *after* creation. If
-# encryption is enabled but fails (missing package or key issues) the code
-# will fall back to an unencrypted backup and append an audit entry.
+# Endurecimento de backups
+# Encriptação de backups: se True os backups serão encriptados com Fernet
+# (biblioteca cryptography). Requer o pacote `cryptography` e um ficheiro de
+# chave em `KEY_FILE`. Os backups são encriptados após a sua criação. Se a
+# encriptação estiver ativa mas falhar (pacote ausente ou problemas de chave)
+# o código regressa a um backup não encriptado e regista o evento de auditoria.
 BACKUP_ENCRYPT = True
-# Path to Fernet key used for backup encryption. If the file does not exist
-# it will be created automatically on first backup (use secure storage in
-# production and rotate keys as needed).
+# Caminho para a chave Fernet usada na encriptação de backups. Se o ficheiro
+# não existir, será criado automaticamente no primeiro backup (usar armazenamento
+# seguro em produção e rotacionar chaves conforme necessário).
 KEY_FILE = "secret.key"
 
-# Try to make backup files permission-restricted (POSIX: 0o600, Windows: read-only)
+# Tentar restringir permissões dos ficheiros de backup (POSIX: 0o600,
+# Windows: read-only) - melhor-esforço
 BACKUP_RESTRICT_PERMISSIONS = True
 
-# run an integrity check on startup (best-effort)
+# Executar uma verificação de integridade ao arranque (melhor-esforço)
 RUN_INTEGRITY_CHECK_ON_START = False
  
-# Secure deletion settings
-SECURE_DELETE_OVERWRITE = True  # overwrite sensitive fields before delete
-SECURE_DELETE_VACUUM = False    # run VACUUM after delete to reduce remnants (may be expensive)
+# Definições para eliminação segura
+# Sobrepor campos sensíveis antes de apagar
+SECURE_DELETE_OVERWRITE = True
+# Executar VACUUM após eliminação para reduzir vestígios (pode ser caro)
+SECURE_DELETE_VACUUM = False
