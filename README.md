@@ -5,7 +5,7 @@
 ## 🤝 Autores
 - Número: **106804, 111342, 122635**
 - Aluno: **Carlos Correia, Pedro Correia, Rui Andrez**
-- este projeto pode ser acessado no repositório GitHub 'https://github.com/LETI-106804/PD.git'
+- Este projeto pode ser acessado no repositório GitHub 'https://github.com/LETI-106804/PD.git'
 
 ---
 
